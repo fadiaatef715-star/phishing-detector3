@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phishing Detector</title>
+<style>
+  body { font-family: Arial, sans-serif; margin: 0; padding: 30px 16px;
+         background: linear-gradient(135deg, #667eea, #764ba2); min-height: 100vh;
+         color: #fff; text-align: center; }
+  h1 { margin: 0 0 6px; }
+  .sub { opacity: 0.85; margin-bottom: 24px; font-size: 14px; }
+  .card { background: #fff; color: #222; max-width: 640px; margin: 0 auto;
+          padding: 22px; border-radius: 14px; text-align: left; }
+  .card h3 { margin: 0 0 10px; }
+  input[type=text] { width: 100%; box-sizing: border-box; padding: 14px;
+          font-size: 16px; border-radius: 8px; border: 1px solid #ccc; }
+  button { margin-top: 14px; padding: 12px 26px; font-size: 16px; border: none;
+           border-radius: 8px; background: #667eea; color: white; cursor: pointer; }
+  .result { margin-top: 20px; padding: 16px; border-radius: 10px; }
+  .safe { background: #e8f5e9; border: 1px solid #2e7d32; }
+  .phish { background: #fdecea; border: 1px solid #c62828; }
+  .verdict { font-size: 24px; font-weight: bold; }
+  .small { color: #555; font-size: 14px; margin-top: 6px; }
+  ul { margin: 6px 0 0; padding-left: 20px; }
+  .examples { margin-top: 16px; font-size: 13px; color: #666; }
+  .examples a { color: #4a5fd0; cursor: pointer; text-decoration: underline;
+                display: block; margin-top: 4px; }
+  .note { margin-top: 22px; font-size: 12px; opacity: 0.85; }
+  .warn { background: #fff3cd; color: #664d03; padding: 10px; border-radius: 8px;
+          max-width: 640px; margin: 0 auto 16px; font-size: 13px; display: none; }
+</style>
+</head>
+<body>
+  <h1>&#128737; Phishing Detector</h1>
+  <div class="sub">Paste a link to scan it with an agent whose weights were tuned using PSO</div>
+  <div id="warn" class="warn"></div>
+  <div class="card">
+    <h3>Check URL</h3>
+    <form id="form">
+      <input type="text" id="url" placeholder="https://example.com" autocomplete="off" autofocus>
+      <button type="submit">Scan URL</button>
+    </form>
+    <div id="out"></div>
+    <div class="examples">Try an example:
+      <a onclick="fill('https://www.google.com')">https://www.google.com</a>
+      <a onclick="fill('http://bank-verify-login.xyz/@secure')">http://bank-verify-login.xyz/@secure</a>
+    </div>
+  </div>
+  <div class="note">The agent looks at the shape of the link only, not at the page content.
+    Nothing you type is sent anywhere: the check runs in your browser.</div>
+
+<script>
+const CONFIG = {"weights": [0.8235539275422522, 0.07052647416720723, 0.44234723731424047, 1.0678798031112262, 0.18279509808936184, 1.9647140009929798, 0.704043477638524, 0.6170689738123109, 2.8297068153181932, 1.217332696201297], "threshold": 0.9493556664395626, "names": ["long_url", "many_dots", "has_at", "ip_address", "many_hyphens", "not_https", "bad_words", "many_subdomains", "many_digits", "bad_tld"], "words": ["login", "verify", "secure", "account", "update", "bank", "confirm", "password", "signin", "paypal", "free", "bonus", "wallet", "suspend", "urgent", "payment"], "tlds": ["xyz", "top", "tk", "ml", "ga", "cf", "gq", "click", "work", "icu"], "lenMode": "host", "checks": [{"url": "https://www.google.com", "score": 0.2886232706808588}, {"url": "https://github.com/python/cpython", "score": 0.2886232706808588}, {"url": "https://en.wikipedia.org/wiki/Python_(programming_language)", "score": 0.6731290089601877}, {"url": "http://bank-verify-login.xyz/@secure", "score": 5.0408938549863}, {"url": "http://192.168.1.15/login/verify", "score": 6.831809027708362}, {"url": "paypal-update-account.top/secure?id=12345", "score": 6.123207215670123}]};
+
+// ---- core ----
+const NICE = {
+  long_url: "Long domain name",
+  many_dots: "Many dots in the domain",
+  has_at: "Contains an @ sign",
+  ip_address: "Uses an IP address instead of a name",
+  many_hyphens: "Many hyphens in the domain",
+  not_https: "Not using HTTPS",
+  bad_words: "Suspicious words (login, verify, bank...)",
+  many_subdomains: "Many subdomains",
+  many_digits: "Many digits",
+  bad_tld: "Suspicious domain ending (.xyz, .top...)",
+};
+
+function count(str, ch) { return str.split(ch).length - 1; }
+function cp(str) { return Array.from(str).length; }
+
+function extractFeatures(url) {
+  url = String(url).trim();
+  let lower = url.toLowerCase();
+  lower = lower.replace("://www.", "://");
+  if (lower.startsWith("www.")) lower = lower.slice(4);
+
+  const full = lower.includes("://") ? lower : "http://" + lower;
+  const rest = full.slice(full.indexOf("://") + 3);
+  const cut = rest.search(/[\/?#]/);
+  const netloc = cut === -1 ? rest : rest.slice(0, cut);
+  const host = netloc.split("@").pop().split(":")[0];
+  const parts = host.split(".").filter(p => p);
+  const tld = parts.length ? parts[parts.length - 1] : "";
+
+  const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(host) ? 1 : 0;
+  const words = CONFIG.words.filter(w => lower.includes(w)).length;
+  const digits = Array.from(lower).filter(c => c >= "0" && c <= "9").length;
+
+  const firstFeature = CONFIG.lenMode === "host"
+    ? Math.min(cp(host) / 30, 1)
+    : Math.min(cp(lower) / 100, 1);
+
+  return [
+    firstFeature,
+    Math.min(count(host, ".") / 5, 1),
+    lower.includes("@") ? 1 : 0,
+    isIp,
+    Math.min(count(host, "-") / 3, 1),
+    lower.startsWith("https://") ? 0 : 1,
+    Math.min(words / 3, 1),
+    Math.min(Math.max(parts.length - 2, 0) / 3, 1),
+    Math.min(digits / 10, 1),
+    CONFIG.tlds.includes(tld) ? 1 : 0,
+  ];
+}
+
+function analyze(url) {
+  const feats = extractFeatures(url);
+  const contrib = feats.map((f, i) => CONFIG.weights[i] * f);
+  const score = contrib.reduce((a, b) => a + b, 0);
+  const verdict = score > CONFIG.threshold ? "PHISHING" : "SAFE";
+  const reasons = contrib
+    .map((c, i) => [c, CONFIG.names[i]])
+    .filter(x => x[0] > 0)
+    .sort((a, b) => (b[0] - a[0]) || (a[1] < b[1] ? 1 : a[1] > b[1] ? -1 : 0))
+    .slice(0, 3)
+    .map(x => x[1]);
+  return { verdict, score, reasons };
+}
+// ---- ui ----
+
+function fill(v) { document.getElementById("url").value = v; }
+
+function show(url) {
+  const r = analyze(url);
+  const items = r.reasons.map(n => "<li>" + (NICE[n] || n) + "</li>").join("");
+  const info = "Risk score: " + r.score.toFixed(2) + " (threshold " + CONFIG.threshold.toFixed(2) + ")";
+  let html;
+  if (r.verdict === "PHISHING") {
+    html = '<div class="result phish"><div class="verdict">Phishing suspected</div>' +
+           '<div class="small">' + info + '</div><div class="small">Why:</div><ul>' + items + "</ul></div>";
+  } else {
+    html = '<div class="result safe"><div class="verdict">Looks safe</div>' +
+           '<div class="small">' + info + "</div>" +
+           (items ? '<div class="small">Minor signs:</div><ul>' + items + "</ul>" : "") + "</div>";
+  }
+  document.getElementById("out").innerHTML = html;
+}
+
+document.getElementById("form").addEventListener("submit", function (e) {
+  e.preventDefault();
+  const url = document.getElementById("url").value.trim();
+  if (url) show(url); else document.getElementById("out").innerHTML = "";
+});
+
+// فحص ذاتي: نتأكد إن درجات المتصفح = درجات بايثون
+const bad = CONFIG.checks.filter(c => Math.abs(analyze(c.url).score - c.score) > 1e-6);
+if (bad.length) {
+  const w = document.getElementById("warn");
+  w.style.display = "block";
+  w.textContent = "Warning: the browser version gives different scores than the Python version. " +
+                  "Do not use this page yet.";
+}
+</script>
+</body>
+</html>
